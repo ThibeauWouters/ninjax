@@ -3,7 +3,7 @@
 
 `ninjax` will be designed to integrate with the following packages:
 
-- `flowMC`: Bayesian inference accelerated by JAX and normalizing flows ([repo](https://github.com/kazewong/flowMC))
-- `jim`: Bayesian inference of gravitational waves ([repo](https://github.com/kazewong/jim))
+- `flowMC`: JAX-based Bayesian inference accelerated by JAX and normalizing flows ([repo](https://github.com/kazewong/flowMC))
+- `jim`: JAX-based Bayesian inference of gravitational waves ([repo](https://github.com/kazewong/jim))
 - `jose`: JAX-based TOV solver ([repo](https://github.com/tsunhopang/jose))
-- `kim`/`grim`: Bayesian inference of kilonovae and GRBs (note: the name might be subject to change) **TO BE ADDED**
+- `trim`: JAX-based Bayesian inference over transient electromagnetic signals, with `kim` for kilonovae and `grim` for GRB signals **REPO TO BE ADDED**
