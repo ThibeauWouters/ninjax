@@ -6,4 +6,4 @@
 - `flowMC`: JAX-based Bayesian inference accelerated by JAX and normalizing flows ([repo](https://github.com/kazewong/flowMC))
 - `jim`: JAX-based Bayesian inference of gravitational waves ([repo](https://github.com/kazewong/jim))
 - `jose`: JAX-based TOV solver ([repo](https://github.com/tsunhopang/jose))
-- `trim`: JAX-based Bayesian inference over transient electromagnetic signals, with `kim` for kilonovae and `grim` for GRB signals **REPO TO BE ADDED**
+- `fiesta`: Fast Inference of Electromagnetic Signals and Transients with JAX ([repo](https://github.com/ThibeauWouters/fiesta))
