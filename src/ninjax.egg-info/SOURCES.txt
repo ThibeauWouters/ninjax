@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+setup.cfg
+setup.py
+src/ninjax.egg-info/PKG-INFO
+src/ninjax.egg-info/SOURCES.txt
+src/ninjax.egg-info/dependency_links.txt
+src/ninjax.egg-info/entry_points.txt
+src/ninjax.egg-info/top_level.txt

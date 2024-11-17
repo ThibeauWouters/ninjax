@@ -1,0 +1,2 @@
+[console_scripts]
+ninjax_analysis = ninjax.analysis:main

@@ -1,0 +1,22 @@
+Metadata-Version: 2.1
+Name: ninjax
+Version: 0.0.1
+Summary: Nitro-speed inference of the nuclear equation of state with jax
+Home-page: https://github.com/thibeauwouters/ninjax
+Author: Thibeau Wouters
+Author-email: thibeauwouters@gmail.com
+License: MIT
+Keywords: sampling,inference,astrophysics,kilonovae,gamma-ray bursts
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+# ninjax
+`ninjax`: Nitro-speed inference of the nuclear equation of state with jax
+
+`ninjax` will be designed to integrate with the following packages:
+
+- `flowMC`: JAX-based Bayesian inference accelerated by JAX and normalizing flows ([repo](https://github.com/kazewong/flowMC))
+- `jim`: JAX-based Bayesian inference of gravitational waves ([repo](https://github.com/kazewong/jim))
+- `jose`: JAX-based TOV solver ([repo](https://github.com/tsunhopang/jose))
+- `fiesta`: Fast Inference of Electromagnetic Signals and Transients with JAX ([repo](https://github.com/ThibeauWouters/fiesta))
