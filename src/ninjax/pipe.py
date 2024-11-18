@@ -4,7 +4,7 @@ import numpy as np
 from astropy.time import Time
 import inspect
 
-from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper
+from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD
 from jimgw.jim import Jim
 from jimgw.single_event.detector import Detector, H1, L1, V1, ET
 from jimgw.single_event.likelihood import HeterodynedTransientLikelihoodFD, TransientLikelihoodFD
@@ -17,8 +17,10 @@ from ninjax.parser import ConfigParser
 from ninjax.likelihood import LikelihoodWithTransforms
 from ninjax import transforms
 
+# TODO: can we make this more automated?
 WAVEFORMS_DICT = {"TaylorF2": RippleTaylorF2, 
                   "IMRPhenomD_NRTidalv2": RippleIMRPhenomD_NRTidalv2,
+                  "IMRPhenomD": RippleIMRPhenomD,
                   }
 SUPPORTED_WAVEFORMS = list(WAVEFORMS_DICT.keys())
 BNS_WAVEFORMS = ["IMRPhenomD_NRTidalv2", "TaylorF2"]
@@ -30,12 +32,19 @@ GW_LIKELIHOODS = ["TransientLikelihoodFD", "HeterodynedTransientLikelihoodFD"]
 
 
 class GWPipe:
-    def __init__(self, config: dict, outdir: str, prior, prior_bounds, seed: int):
+    def __init__(self, 
+                 config: dict, 
+                 outdir: str, 
+                 prior: Composite,
+                 prior_bounds: np.array, 
+                 seed: int,
+                 transforms: list[Callable]):
         self.config = config
         self.outdir = outdir
         self.complete_prior = prior
         self.complete_prior_bounds = prior_bounds
         self.seed = seed
+        self.transforms = transforms
         
         # Initialize other GW-specific attributes
         self.eos_file = self.set_eos_file()
@@ -134,7 +143,7 @@ class GWPipe:
         # TODO: get full file path if needed
         eos_file = str(self.config["eos_file"])
         logger.info(f"eos_file is {eos_file}")
-        if eos_file == "None" or len(eos_file) == 0:
+        if eos_file.lower() == "none" or len(eos_file) == 0:
             logger.info("No eos_file specified. Will sample lambdas uniformly.")
             return None
         else:
@@ -214,38 +223,23 @@ class GWPipe:
                 1. / self.duration
             )
             
-            # convert injected mass ratio to eta, and apply arccos and arcsin # TODO: generalize and do someplace else
-            q = injection["q"]
-            injection["eta"] = q / (1 + q) ** 2
-            injection["iota"] = float(jnp.arccos(injection["cos_iota"]))
-            injection["dec"] = float(jnp.arcsin(injection["sin_dec"]))
+            # Make any necessary conversions
+            injection = self.apply_transforms(injection)
+            
             # Setup the timing setting for the injection
             self.epoch = self.duration - self.post_trigger_duration
             self.gmst = Time(self.trigger_time, format='gps').sidereal_time('apparent', 'greenwich').rad
-            # Array of injection parameters # TODO: make this automatic
-            true_param = {
-                'M_c':       injection["M_c"],
-                'eta':       injection["eta"],
-                's1_z':      injection["s1_z"],
-                's2_z':      injection["s2_z"],
-                'lambda_1':  injection["lambda_1"],
-                'lambda_2':  injection["lambda_2"],
-                'd_L':       injection["d_L"],
-                't_c':       injection["t_c"],
-                'phase_c':   injection["phase_c"],
-                'iota':      injection["iota"],
-                'psi':       injection["psi"],
-                'ra':        injection["ra"],
-                'dec':       injection["dec"],
-                }
+            
+            # Get the array of the injection parameters
+            true_param = {key: injection[key] for key in self.waveform.required_keys + ["t_c", "psi", "ra", "dec"]}
             
             logger.info(f"The trial injection parameters are {injection}")
             
             self.detector_param = {
-                'ra':     injection["ra"],
-                'dec':    injection["dec"],
                 'psi':    injection["psi"],
                 't_c':    injection["t_c"],
+                'ra':     injection["ra"],
+                'dec':    injection["dec"],
                 'epoch':  self.epoch,
                 'gmst':   self.gmst,
                 }
@@ -303,15 +297,20 @@ class GWPipe:
         self.detector_param["duration"] = self.duration
         injection.update(self.detector_param)
         
-        logger.info("Sanity checking the GW injection for ArrayImpl")
-        for key, value in injection.items():
-            logger.info(f"   {key}: {value}")
-            
         return injection
     
+    def apply_transforms(self, params: dict):
+        for transform in self.transforms:
+            params = transform(params)
+        return params
+    
     def dump_gw_injection(self):
+        logger.info("Sanity checking the GW injection for ArrayImpl")
+        for key, value in self.gw_injection.items():
+            logger.info(f"   {key}: {value}")
+        
         with open(os.path.join(self.outdir, "injection.json"), "w") as f:
-            json.dump(self.gw_injection, f, indent=4)
+            json.dump(self.gw_injection, f, indent=4, cls=utils.CustomJSONEncoder)
     
     def set_gw_data_from_npz(self):
         # FIXME: this has to be added in the future
@@ -467,7 +466,7 @@ class NinjaxPipe(object):
     def dump_complete_config(self):
         """Dumps the complete config after merging the user and the default settings to a JSON file"""
         complete_ini_filename = os.path.join(self.outdir, "complete_config.json")
-        json.dump(self.config, open(complete_ini_filename, "w"), indent=4)
+        json.dump(self.config, open(complete_ini_filename, "w"), indent=4, cls=utils.CustomJSONEncoder)
         logger.info(f"Complete config file written to {os.path.abspath(complete_ini_filename)}")
 
     def set_prior(self) -> Composite:
@@ -560,7 +559,8 @@ class NinjaxPipe(object):
         # Set up everything needed for GW likelihood
         if likelihood_str in GW_LIKELIHOODS:
             logger.info("GW likelihood provided, setting up the GW pipe")
-            self.gw_pipe = GWPipe(self.config, self.outdir, self.complete_prior, self.complete_prior_bounds, self.seed)
+            # TODO: this is becoming quite cumbersome... perhaps there is a better way to achieve this?
+            self.gw_pipe = GWPipe(self.config, self.outdir, self.complete_prior, self.complete_prior_bounds, self.seed, self.transforms)
             
         # Create the likelihood
         if likelihood_str == "HeterodynedTransientLikelihoodFD":
@@ -585,6 +585,8 @@ class NinjaxPipe(object):
                 ref_params=ref_params,
                 )
         
+            print(likelihood.required_keys)
+        
         elif likelihood_str == "TransientLikelihoodFD":
             logger.info("Using GW TransientLikelihoodFD. Initializing likelihood")
             likelihood = TransientLikelihoodFD(
@@ -594,6 +596,7 @@ class NinjaxPipe(object):
                 duration=self.gw_pipe.duration,
                 post_trigger_duration=self.gw_pipe.post_trigger_duration,
                 )
+            print(likelihood.required_keys)
         
         return likelihood
     
@@ -610,18 +613,18 @@ class NinjaxPipe(object):
             if key not in keys_transformed:
                 raise ValueError(f"Required key {key} not found in the transformed parameters. Something is wrong with the setup!")
 
-    def get_eos_file(self):
-        eos_file = str(self.config["eos_file"])
-        if eos_file is None:
-            logger.info("No eos_file specified. Will sample lambdas uniformly.")
-        else:
-            assert eos_file.endswith(".npz"), "eos_file must be an npz file"
-            data = np.load(eos_file)
-            keys = list(data.keys())
-            assert "masses_EOS" in keys, "Key `masses_EOS` not found in eos_file"
-            assert "Lambdas_EOS" in keys, "Key `Lambdas_EOS` not found in eos_file"
-            logger.info(f"Using eos_file {eos_file} for BNS injections")
-        return eos_file
+    # def get_eos_file(self):
+    #     eos_file = str(self.config["eos_file"])
+    #     if eos_file is None:
+    #         logger.info("No eos_file specified. Will sample lambdas uniformly.")
+    #     else:
+    #         assert eos_file.endswith(".npz"), "eos_file must be an npz file"
+    #         data = np.load(eos_file)
+    #         keys = list(data.keys())
+    #         assert "masses_EOS" in keys, "Key `masses_EOS` not found in eos_file"
+    #         assert "Lambdas_EOS" in keys, "Key `Lambdas_EOS` not found in eos_file"
+    #         logger.info(f"Using eos_file {eos_file} for BNS injections")
+    #     return eos_file
 
     def get_seed(self):
         if isinstance(self.config["seed"], int):

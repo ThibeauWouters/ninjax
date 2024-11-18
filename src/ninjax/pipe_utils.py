@@ -99,6 +99,14 @@ class DuplicateErrorDict(dict):
             raise ValueError(msg)
         dict.__setitem__(self, key, val)
 
+class CustomJSONEncoder(json.JSONEncoder):
+    """A JSON encoder that can deal with JAX arrays"""
+    def default(self, obj):
+        # Handle JAX arrays
+        if isinstance(obj, jnp.ndarray):
+            return np.array(obj).tolist()
+        # Handle other custom cases if necessary
+        return super().default(obj)
 
 def setup_logger(outdir=None, label=None, log_level="INFO"):
     """Setup logging output: call at the start of the script to use
