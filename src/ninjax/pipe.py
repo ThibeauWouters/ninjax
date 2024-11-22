@@ -1,20 +1,22 @@
 import os
 import json
+import copy
 import numpy as np
 from astropy.time import Time
 import inspect
 
 from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD
 from jimgw.jim import Jim
-from jimgw.single_event.detector import Detector, H1, L1, V1, ET
+from jimgw.single_event.detector import Detector, H1, L1, V1, ET, TriangularNetwork2G
 from jimgw.single_event.likelihood import HeterodynedTransientLikelihoodFD, TransientLikelihoodFD
 from jimgw.prior import *
 from jimgw.base import LikelihoodBase
 
 import ninjax.pipe_utils as utils
 from ninjax.pipe_utils import logger
+from ninjax.pipes.EOSPipe import EOSPipe, NEP_CONSTANTS_DICT, NEP_NAMES
 from ninjax.parser import ConfigParser
-from ninjax.likelihood import LikelihoodWithTransforms
+from ninjax.likelihood import LikelihoodWithTransforms, GW_EOS_Likelihood
 from ninjax import transforms
 
 # TODO: can we make this more automated?
@@ -27,9 +29,9 @@ BNS_WAVEFORMS = ["IMRPhenomD_NRTidalv2", "TaylorF2"]
 
 LIKELIHOODS_DICT = {"TransientLikelihoodFD": TransientLikelihoodFD, 
                     "HeterodynedTransientLikelihoodFD": HeterodynedTransientLikelihoodFD,
+                    "GW_EOS_Likelihood": GW_EOS_Likelihood
                     }
-GW_LIKELIHOODS = ["TransientLikelihoodFD", "HeterodynedTransientLikelihoodFD"]
-
+GW_LIKELIHOODS = ["TransientLikelihoodFD", "HeterodynedTransientLikelihoodFD", "GW_EOS_Likelihood"]
 
 class GWPipe:
     def __init__(self, 
@@ -66,7 +68,6 @@ class GWPipe:
             self.set_gw_data_from_npz()
             # self.set_detector_info() # needed? Duration, epoch, gmst,...
             
-        
     @property
     def fmin(self):
         return float(self.config["fmin"])
@@ -116,8 +117,16 @@ class GWPipe:
         return self.config["psd_file_V1"]
 
     @property
-    def psd_file_ET(self):
-        return self.config["psd_file_ET"]
+    def psd_file_ET1(self):
+        return self.config["psd_file_ET1"]
+    
+    @property
+    def psd_file_ET2(self):
+        return self.config["psd_file_ET2"]
+    
+    @property
+    def psd_file_ET3(self):
+        return self.config["psd_file_ET3"]
     
     @property
     def relative_binning_binsize(self):
@@ -131,7 +140,9 @@ class GWPipe:
         psds_dict = {"H1": self.psd_file_H1,
                      "L1": self.psd_file_L1,
                      "V1": self.psd_file_V1,
-                     "ET": self.psd_file_ET}
+                     "ET1": self.psd_file_ET1,
+                     "ET2": self.psd_file_ET2,
+                     "ET3": self.psd_file_ET3}
         return psds_dict
     
     def set_eos_file(self) -> str:
@@ -169,7 +180,6 @@ class GWPipe:
         
         return
         
-    
     def set_gw_injection(self):
         """
         Function that creates a GW injection, taking into account the given priors and the SNR thresholds.
@@ -213,6 +223,9 @@ class GWPipe:
                 duration = 2 ** np.ceil(np.log2(duration))
                 duration = float(duration)
                 logger.info(f"Duration is not specified in the config. Computed chirp time: for fmin = {self.fmin} and M_c = {injection['M_c']} is {duration}")
+            else:
+                duration = config_duration
+                logger.info(f"Duration is specified in the config: {duration}")
                 
             self.duration = duration
                 
@@ -231,9 +244,9 @@ class GWPipe:
             self.gmst = Time(self.trigger_time, format='gps').sidereal_time('apparent', 'greenwich').rad
             
             # Get the array of the injection parameters
-            true_param = {key: injection[key] for key in self.waveform.required_keys + ["t_c", "psi", "ra", "dec"]}
+            true_param = {key: float(injection[key]) for key in self.waveform.required_keys + ["t_c", "psi", "ra", "dec"]}
             
-            logger.info(f"The trial injection parameters are {injection}")
+            logger.info(f"The trial injection parameters are {true_param}")
             
             self.detector_param = {
                 'psi':    injection["psi"],
@@ -248,6 +261,8 @@ class GWPipe:
             logger.info("Injecting signals . . .")
             self.h_sky = self.waveform(self.frequencies, true_param)
             key = jax.random.PRNGKey(self.seed)
+            logger.info("self.ifos")
+            logger.info(self.ifos)
             for ifo in self.ifos:
                 key, subkey = jax.random.split(key)
                 ifo.inject_signal(
@@ -267,14 +282,14 @@ class GWPipe:
             # Compute the SNRs, and save to a dict to be dumped later on
             snr_dict = {}
             for ifo in self.ifos:
-                if ifo.name == "ET":
-                    snr_dict["ET1_SNR"] = utils.compute_snr(ifo[0], self.h_sky, self.detector_param)
-                    snr_dict["ET2_SNR"] = utils.compute_snr(ifo[1], self.h_sky, self.detector_param)
-                    snr_dict["ET3_SNR"] = utils.compute_snr(ifo[2], self.h_sky, self.detector_param)
-                else:
-                    snr = utils.compute_snr(ifo, self.h_sky, self.detector_param)
-                    logger.info(f"SNR for ifo {ifo.name} is {snr}")
-                    snr_dict[f"{ifo.name}_SNR"] = snr
+                # if ifo.name == "ET":
+                #     snr_dict["ET1_SNR"] = utils.compute_snr(ifo[0], self.h_sky, self.detector_param)
+                #     snr_dict["ET2_SNR"] = utils.compute_snr(ifo[1], self.h_sky, self.detector_param)
+                #     snr_dict["ET3_SNR"] = utils.compute_snr(ifo[2], self.h_sky, self.detector_param)
+                # else:
+                snr = utils.compute_snr(ifo, self.h_sky, self.detector_param)
+                logger.info(f"SNR for ifo {ifo.name} is {snr}")
+                snr_dict[f"{ifo.name}_SNR"] = snr
             
             snr_list = list(snr_dict.values())
             self.network_snr = float(jnp.sqrt(jnp.sum(jnp.array(snr_list) ** 2)))
@@ -302,6 +317,9 @@ class GWPipe:
     def apply_transforms(self, params: dict):
         for transform in self.transforms:
             params = transform(params)
+        # FIXME: this hard-coding is not so nice
+        params["iota"] = params["iota"] % (2 * np.pi)
+        params["dec"] = params["dec"] % (2 * np.pi)
         return params
     
     def dump_gw_injection(self):
@@ -349,11 +367,14 @@ class GWPipe:
         for single_ifo_str in self.ifos_str:
             if single_ifo_str not in supported_ifos:
                 raise ValueError(f"IFO {single_ifo_str} not supported. Supported IFOs are {supported_ifos}.")
-            ifos.append(eval(single_ifo_str))
+            new_ifo = eval(single_ifo_str)
+            if isinstance(new_ifo, TriangularNetwork2G):
+                ifos += new_ifo.ifos
+            else:
+                ifos.append(new_ifo)
         return ifos
     
-
-
+    
 class NinjaxPipe(object):
     
     def __init__(self, outdir: str):
@@ -383,6 +404,12 @@ class NinjaxPipe(object):
         self.complete_prior_bounds = self.set_prior_bounds()
         logger.info("Finished prior setup")
         
+        # If an EOS prior is specified, we need to set up an EOS prior
+        if self.has_eos_priors():
+            logger.info("The prior contains EOS parameters. Setting up EOS pipe now")
+            # FIXME: pass fixed EOS params?
+            self.eos_pipe = EOSPipe(self.config, self.complete_prior)
+        
         # Set the transforms
         logger.info(f"Setting the transforms")
         self.transforms_str_list: str = self.set_transforms_str_list()
@@ -393,11 +420,12 @@ class NinjaxPipe(object):
         likelihood_str: str = self.config["likelihood"]
         self.check_valid_likelihood(likelihood_str)
         self.original_likelihood = self.set_original_likelihood(likelihood_str)
+        logger.info(f"Original likelihood is set. Required keys are: {self.original_likelihood.required_keys}")
         
         self.likelihood = LikelihoodWithTransforms(self.original_likelihood, self.transforms)
         
         # TODO: check if the setup prior -> transform -> likelihood is OK
-        logger.info(f"Required keys for the likelihood: {self.likelihood.required_keys}")
+        logger.info(f"Required keys for the final likelihood: {self.likelihood.required_keys}")
         self.check_prior_transforms_likelihood_setup()
 
         # TODO: make the default keys to plot empty/None and use prior naming in that case
@@ -480,6 +508,8 @@ class NinjaxPipe(object):
                     continue
                 
                 logger.info(f"   {stripped_line}")
+                if stripped_line.startswith("#"):
+                    continue
                 exec(stripped_line)
                 
                 prior_name = stripped_line.split("=")[0].strip()
@@ -491,6 +521,18 @@ class NinjaxPipe(object):
         # TODO: generalize this: (i) only for GW relative binning, (ii) xmin xmax might fail for more advanced priors
         return jnp.array([[p.xmin, p.xmax] for p in self.complete_prior.priors])
     
+    def has_eos_priors(self) -> bool:
+        """
+        Check if the prior containts prior over EOS parameters
+        TODO: make this more robust?
+        """
+        
+        # Check if there is an NEP in the naming
+        naming = self.complete_prior.naming
+        for name in naming:
+            if name in NEP_NAMES or "n_CSE" in name or "cs2_CSE" in name:
+                return True
+        return False
     
     def set_flowmc_hyperparameters(self) -> dict:
         hyperparameters = {
@@ -585,7 +627,29 @@ class NinjaxPipe(object):
                 ref_params=ref_params,
                 )
         
-            print(likelihood.required_keys)
+        elif likelihood_str == "GW_EOS_Likelihood":
+            logger.info("Using GW with EOS likelihood. Initializing heterodyned GW likelihood")
+            if self.gw_pipe.relative_binning_ref_params_equal_true_params:
+                ref_params = self.gw_pipe.gw_injection
+                logger.info("Using the true parameters as reference parameters for the relative binning")
+            else:
+                ref_params = None
+                logger.info("Will search for reference waveform for relative binning")
+            
+            gw_likelihood = HeterodynedTransientLikelihoodFD(
+                self.gw_pipe.ifos,
+                prior=self.complete_prior,
+                bounds=self.complete_prior_bounds, 
+                n_bins = self.gw_pipe.relative_binning_binsize,
+                waveform=self.gw_pipe.waveform,
+                reference_waveform=self.gw_pipe.reference_waveform,
+                trigger_time=self.gw_pipe.trigger_time,
+                duration=self.gw_pipe.duration,
+                post_trigger_duration=self.gw_pipe.post_trigger_duration,
+                ref_params=ref_params,
+                )
+            
+            likelihood = GW_EOS_Likelihood(gw_likelihood, self.eos_pipe)
         
         elif likelihood_str == "TransientLikelihoodFD":
             logger.info("Using GW TransientLikelihoodFD. Initializing likelihood")
@@ -596,35 +660,22 @@ class NinjaxPipe(object):
                 duration=self.gw_pipe.duration,
                 post_trigger_duration=self.gw_pipe.post_trigger_duration,
                 )
-            print(likelihood.required_keys)
         
         return likelihood
     
     def check_prior_transforms_likelihood_setup(self):
-        
+        """Check if the setup between prior, transforms, and likelihood is correct by a small test."""
         logger.info("Checking the setup between prior, transforms, and likelihood")
         sample = self.complete_prior.sample(jax.random.PRNGKey(self.seed), 3)
         logger.info(f"sample: {sample}")
-        sample_transformed = self.likelihood.transform(sample)
+        sample_transformed = jax.vmap(self.likelihood.transform)(sample)
         logger.info(f"sample_transformed: {sample_transformed}")
-        keys_transformed = list(sample_transformed.keys())
         
-        for key in self.likelihood.required_keys:
-            if key not in keys_transformed:
-                raise ValueError(f"Required key {key} not found in the transformed parameters. Something is wrong with the setup!")
-
-    # def get_eos_file(self):
-    #     eos_file = str(self.config["eos_file"])
-    #     if eos_file is None:
-    #         logger.info("No eos_file specified. Will sample lambdas uniformly.")
-    #     else:
-    #         assert eos_file.endswith(".npz"), "eos_file must be an npz file"
-    #         data = np.load(eos_file)
-    #         keys = list(data.keys())
-    #         assert "masses_EOS" in keys, "Key `masses_EOS` not found in eos_file"
-    #         assert "Lambdas_EOS" in keys, "Key `Lambdas_EOS` not found in eos_file"
-    #         logger.info(f"Using eos_file {eos_file} for BNS injections")
-    #     return eos_file
+        # TODO: what if we actually need to give data instead of nothing?
+        log_prob = jax.vmap(self.likelihood.evaluate)(sample, {})
+        if jnp.isnan(log_prob).any():
+            raise ValueError("Log probability is NaN. Something is wrong with the setup!")
+        logger.info(f"log_prob: {log_prob}")
 
     def get_seed(self):
         if isinstance(self.config["seed"], int):

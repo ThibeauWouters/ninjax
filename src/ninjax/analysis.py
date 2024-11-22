@@ -10,6 +10,8 @@ import shutil
 import json
 import jax
 jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_debug_infs", True)
 import jax.numpy as jnp
 import optax
 
@@ -124,14 +126,14 @@ def body(pipe: NinjaxPipe):
     # Final cornerplot
     logger.info("Creating the final corner plot")
     
+    chains = jim.get_samples(training = False)
+    chains = pipe.likelihood.transform(chains)
+    chains = {key: np.array(chains[key]) for key in chains.keys()}
+    
+    logger.info("Dumping the final production chains")
+    np.savez(outdir + f'chains_production.npz', **chains)
+    
     try: 
-        chains = jim.get_samples(training = False)
-        chains = pipe.likelihood.transform(chains)
-        chains = {key: np.array(chains[key]) for key in chains.keys()}
-        
-        logger.info("Dumping the final production chains")
-        np.savez(outdir + f'chains_production.npz', **chains)
-        
         chains = np.array([chains[key].flatten() for key in pipe.keys_to_plot])
         logger.info(f"Chains shape is: {chains.shape}")
         truths = np.array([injection[key] for key in pipe.keys_to_plot])
