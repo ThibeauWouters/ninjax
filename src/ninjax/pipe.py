@@ -237,7 +237,12 @@ class GWPipe:
             )
             
             # Make any necessary conversions
-            injection = self.apply_transforms(injection)
+            # FIXME: hacky way for now
+            try:
+                injection = self.apply_transforms(injection)
+            except Exception as e:
+                logger.error(f"Error in applying transforms: {e}")
+                # raise ValueError("Error in applying transforms")
             
             # Setup the timing setting for the injection
             self.epoch = self.duration - self.post_trigger_duration
