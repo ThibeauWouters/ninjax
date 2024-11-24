@@ -6,8 +6,8 @@ import re
 import json
 from collections import OrderedDict
 
-import ninjax.pipe_utils as utils
-from ninjax.pipe_utils import logger, DuplicateErrorDict
+import ninjax.pipes.pipe_utils as utils
+from ninjax.pipes.pipe_utils import logger, DuplicateErrorDict
 
 class ConfigParser(object):
     

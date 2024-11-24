@@ -15,9 +15,9 @@ import optax
 
 from jimgw.jim import Jim
 
-import ninjax.pipe_utils as utils
-from ninjax.pipe_utils import logger
-from ninjax.pipe import NinjaxPipe
+import ninjax.pipes.pipe_utils as utils
+from ninjax.pipes.pipe_utils import logger
+from ninjax.pipes.ninjax_pipe import NinjaxPipe
 
 ####################
 ### Script setup ###
