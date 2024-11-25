@@ -8,6 +8,7 @@ from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPheno
 from jimgw.jim import Jim
 from jimgw.single_event.detector import Detector, TriangularNetwork2G, H1, L1, V1, ET
 from jimgw.single_event.likelihood import HeterodynedTransientLikelihoodFD, TransientLikelihoodFD
+from jimgw.single_event.overlapping_likelihood import HeterodynedDoubleTransientLikelihoodFD, DoubleTransientLikelihoodFD
 from jimgw.prior import *
 from jimgw.base import LikelihoodBase
 
@@ -21,8 +22,10 @@ from ninjax import transforms
 # TODO: can we make this more automated?
 LIKELIHOODS_DICT = {"TransientLikelihoodFD": TransientLikelihoodFD, 
                     "HeterodynedTransientLikelihoodFD": HeterodynedTransientLikelihoodFD,
+                    "DoubleTransientLikelihoodFD": DoubleTransientLikelihoodFD, 
+                    "HeterodynedDoubleTransientLikelihoodFD": HeterodynedDoubleTransientLikelihoodFD,
                     }
-GW_LIKELIHOODS = ["TransientLikelihoodFD", "HeterodynedTransientLikelihoodFD"]
+GW_LIKELIHOODS = ["TransientLikelihoodFD", "HeterodynedTransientLikelihoodFD", "DoubleTransientLikelihoodFD", "HeterodynedDoubleTransientLikelihoodFD"]
 
 
 class NinjaxPipe(object):
@@ -158,6 +161,10 @@ class NinjaxPipe(object):
                     logger.info("Encountered empty line in prior file, continue")
                     continue
                 
+                # Skip lines that are commented out
+                if stripped_line.startswith("#"):
+                    continue
+                
                 logger.info(f"   {stripped_line}")
                 exec(stripped_line)
                 
@@ -240,6 +247,7 @@ class NinjaxPipe(object):
         if likelihood_str in GW_LIKELIHOODS:
             logger.info("GW likelihood provided, setting up the GW pipe")
             # TODO: this is becoming quite cumbersome... perhaps there is a better way to achieve this?
+            self.config["gw_is_overlapping"] = likelihood_str in ["DoubleTransientLikelihoodFD", "HeterodynedDoubleTransientLikelihoodFD"]
             self.gw_pipe = GWPipe(self.config, self.outdir, self.complete_prior, self.complete_prior_bounds, self.seed, self.transforms)
             
         # Create the likelihood
@@ -281,6 +289,47 @@ class NinjaxPipe(object):
                 trigger_time=self.gw_pipe.trigger_time,
                 duration=self.gw_pipe.duration,
                 post_trigger_duration=self.gw_pipe.post_trigger_duration,
+                **self.gw_pipe.kwargs
+                )
+            print(likelihood.required_keys)
+        
+        elif likelihood_str == "DoubleTransientLikelihoodFD":
+            
+            logger.info(f"Using the following kwargs for the GW likelihood: {self.gw_pipe.kwargs}")
+            
+            logger.info("Using GW TransientLikelihoodFD. Initializing likelihood")
+            likelihood = DoubleTransientLikelihoodFD(
+                self.gw_pipe.ifos,
+                waveform=self.gw_pipe.waveform,
+                trigger_time=self.gw_pipe.trigger_time,
+                duration=self.gw_pipe.duration,
+                post_trigger_duration=self.gw_pipe.post_trigger_duration,
+                **self.gw_pipe.kwargs
+                )
+            print(likelihood.required_keys)
+        
+        elif likelihood_str == "HeterodynedDoubleTransientLikelihoodFD":
+            if self.gw_pipe.relative_binning_ref_params_equal_true_params:
+                ref_params = self.gw_pipe.gw_injection
+                logger.info("Using the true parameters as reference parameters for the relative binning")
+            else:
+                ref_params = None
+                logger.info("Will search for reference waveform for relative binning")
+            
+            logger.info(f"Using the following kwargs for the GW likelihood: {self.gw_pipe.kwargs}")
+            
+            logger.info("Using GW TransientLikelihoodFD. Initializing likelihood")
+            likelihood = HeterodynedDoubleTransientLikelihoodFD(
+                self.gw_pipe.ifos,
+                prior=self.complete_prior,
+                bounds=self.complete_prior_bounds, 
+                n_bins = self.gw_pipe.relative_binning_binsize,
+                waveform=self.gw_pipe.waveform,
+                reference_waveform=self.gw_pipe.reference_waveform,
+                trigger_time=self.gw_pipe.trigger_time,
+                duration=self.gw_pipe.duration,
+                post_trigger_duration=self.gw_pipe.post_trigger_duration,
+                ref_params=ref_params,
                 **self.gw_pipe.kwargs
                 )
             print(likelihood.required_keys)

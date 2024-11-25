@@ -48,8 +48,11 @@ class GWPipe:
         self.is_gw_injection = eval(self.config["gw_injection"])
         logger.info(f"GW run is an injection")
         if self.is_gw_injection:
-            # TODO: should separate load existing injection from creating new one
-            self.gw_injection = self.set_gw_injection()
+            if self.config["gw_is_overlapping"]:
+                self.gw_injection = self.set_overlapping_gw_injection()
+            else:
+                # TODO: should separate load existing injection from creating new one
+                self.gw_injection = self.set_gw_injection()
             self.dump_gw_injection()
         else:
             self.set_gw_data_from_npz()
@@ -313,12 +316,171 @@ class GWPipe:
         
         return injection
     
+    def set_overlapping_gw_injection(self):
+        """
+        Function that creates an overlapping GW injection, taking into account the given priors and the SNR thresholds.
+        # TODO: assuming exactly two signals for now, is that OK?
+        # TODO: make sure there is as minimal code duplication with the single injection function as possible
+        # TODO: do not hardcode injection.json, make more flexible
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            _type_: _description_
+        """
+        logger.info(f"Setting up overlapping GW injection . . . ")
+        logger.info(f"The SNR thresholds are: {self.gw_SNR_threshold_low} - {self.gw_SNR_threshold_high}")
+        pass_threshold = False
+        config_duration = eval(self.config["duration"])
+        
+        sample_key = jax.random.PRNGKey(self.seed)
+        while not pass_threshold:
+            
+            # Generate the parameters or load them from an existing file
+            injection_path = os.path.join(self.outdir, "injection.json")
+            if self.gw_load_existing_injection:
+                logger.info(f"Loading existing injection, path: {injection_path}")
+                injection = json.load(open(injection_path))
+            else:
+                logger.info(f"Generating new injection")
+                sample_key, subkey = jax.random.split(sample_key)
+                injection = utils.generate_injection(injection_path, self.complete_prior, subkey)
+            
+            # TODO: here is where we might have to transform from prior to ripple/jim parameters
+            
+            # If a BNS run, we can infer Lambdas from a given EOS if desired and override the parameters
+            if self.is_BNS_run and self.eos_file is not None:
+                raise NotImplementedError("Overlapping BNS injections with EOS not implemented yet")
+                logger.info(f"Computing lambdas from EOS file {self.eos_file} . . . ")
+                injection = utils.inject_lambdas_from_eos(injection, self.eos_file)
+            
+            # Get duration based on Mc and fmin if not specified
+            if config_duration is None:
+                lower_M_c = min(injection["M_c_1"], injection["M_c_2"])
+                duration = utils.signal_duration(self.fmin, lower_M_c)
+                duration = 2 ** np.ceil(np.log2(duration))
+                duration = float(duration)
+                logger.info(f"Duration is not specified in the config. Computed chirp time: for fmin = {self.fmin} and M_c = {lower_M_c} is {duration}")
+            else:
+                duration = config_duration
+                logger.info(f"Duration is specified in the config: {duration}")
+                
+            self.duration = duration
+                
+            # Construct frequencies array
+            self.frequencies = jnp.arange(
+                self.fmin,
+                self.fmax,
+                1. / self.duration
+            )
+            
+            # Make any necessary conversions
+            # FIXME: hacky way for now --  if users specify iota in the injection, but sample over cos_iota and do the tfo, this breaks
+            # try:
+            injection = self.apply_transforms(injection)
+            # except Exception as e:
+            #     logger.error(f"Error in applying transforms: {e}")
+            #     # raise ValueError("Error in applying transforms")
+            
+            # Setup the timing setting for the injection
+            self.epoch = self.duration - self.post_trigger_duration
+            self.gmst = Time(self.trigger_time, format='gps').sidereal_time('apparent', 'greenwich').rad
+            
+            # Get the array of the injection parameters
+            required_keys_1 = [f"{k}_1" for k in self.waveform.required_keys]
+            required_keys_2 = [f"{k}_2" for k in self.waveform.required_keys]
+            
+            true_param_1 = {key[:-2]: float(injection[key]) for key in required_keys_1 + ["t_c_1", "psi_1", "ra_1", "dec_1"]}
+            true_param_2 = {key[:-2]: float(injection[key]) for key in required_keys_2 + ["t_c_2", "psi_2", "ra_2", "dec_2"]}
+            
+            logger.info(f"The trial injection parameters are {injection}")
+            
+            self.detector_param_1 = {
+                'psi':    injection["psi_1"],
+                't_c':    injection["t_c_1"],
+                'ra':     injection["ra_1"],
+                'dec':    injection["dec_1"],
+                'epoch':  self.epoch,
+                'gmst':   self.gmst,
+                }
+            
+            self.detector_param_2 = {
+                'psi':    injection["psi_2"],
+                't_c':    injection["t_c_2"],
+                'ra':     injection["ra_2"],
+                'dec':    injection["dec_2"],
+                'epoch':  self.epoch,
+                'gmst':   self.gmst,
+                }
+            
+            # Generating the geocenter waveform
+            snr_dict = {}
+            logger.info("Injecting signals . . .")
+            self.h_sky_1 = self.waveform(self.frequencies, true_param_1)
+            self.h_sky_2 = self.waveform(self.frequencies, true_param_2)
+            key = jax.random.PRNGKey(self.seed)
+            logger.info("self.ifos")
+            logger.info(self.ifos)
+            for ifo in self.ifos:
+                key, subkey = jax.random.split(key)
+                ifo.inject_signal(
+                    subkey,
+                    self.frequencies,
+                    self.h_sky_1,
+                    self.detector_param_1,
+                    psd_file=self.psds_dict[ifo.name]
+                )
+                
+                ifo.add_signal(
+                    self.h_sky_2,
+                    self.detector_param_2,
+                )
+                
+                # TODO: remove once tested
+                logger.info(f"Signal injected in ifo {ifo.name}. Frequencies, data, and PSD:")
+                logger.info(ifo.frequencies)
+                logger.info(ifo.data)
+                logger.info(ifo.psd)
+                
+                # Compute the SNR
+                snr = utils.compute_snr(ifo, self.h_sky_1, self.detector_param_1)
+                snr_dict[f"{ifo.name}_SNR_1"] = snr
+                logger.info(f"SNR for ifo {ifo.name} and signal 1 is {snr}")
+                
+                snr = utils.compute_snr(ifo, self.h_sky_2, self.detector_param_2)
+                snr_dict[f"{ifo.name}_SNR_2"] = snr
+                logger.info(f"SNR for ifo {ifo.name} and signal 2 is {snr}")
+            
+            snr_list = list(snr_dict.values())
+            self.network_snr = float(jnp.sqrt(jnp.sum(jnp.array(snr_list) ** 2)))
+            
+            logger.info(f"The network SNR is {self.network_snr}")
+            
+            # If the SNR is too low, we need to generate new parameters
+            pass_threshold = self.network_snr > self.gw_SNR_threshold_low and self.network_snr < self.gw_SNR_threshold_high
+            if not pass_threshold:
+                if self.gw_load_existing_injection:
+                    raise ValueError("SNR does not pass threshold, but loading existing injection. This should not happen!")
+                else:
+                    logger.info("The network SNR does not pass the threshold, trying again")
+                    
+        logger.info(f"Network SNR passes threshold")
+        injection.update(snr_dict)
+        injection["network_SNR"] = self.network_snr
+        
+        # Also add detector etc info
+        self.detector_param_1["duration"] = self.duration
+        self.detector_param_2["duration"] = self.duration
+        
+        injection.update(self.detector_param_1)
+        injection.update(self.detector_param_2)
+        
+        return injection
+    
     def apply_transforms(self, params: dict):
         for transform in self.transforms:
             params = transform(params)
-        # FIXME: this hard-coding is not so nice
-        params["iota"] = params["iota"] % (2 * np.pi)
-        params["dec"] = params["dec"] % (2 * np.pi)
         return params
     
     def dump_gw_injection(self):
