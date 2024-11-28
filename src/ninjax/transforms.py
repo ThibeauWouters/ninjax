@@ -14,6 +14,27 @@ def sin_dec_to_dec(params: dict) -> dict:
     params["dec"] = jnp.arcsin(params["sin_dec"])
     return params
 
+def spin_sphere_to_cartesian_s1(params: dict) -> dict:
+    s1_x = jnp.sin(params["s1_theta"]) * jnp.cos(params["s1_phi"]) * params["s1_mag"]
+    s1_y = jnp.sin(params["s1_theta"]) * jnp.sin(params["s1_phi"]) * params["s1_mag"]
+    s1_z = jnp.cos(params["s1_theta"]) * params["s1_mag"]
+    
+    params["s1_x"] = s1_x
+    params["s1_y"] = s1_y
+    params["s1_z"] = s1_z
+    
+    return params
+
+def spin_sphere_to_cartesian_s2(params: dict) -> dict:
+    s2_x = jnp.sin(params["s2_theta"]) * jnp.cos(params["s2_phi"]) * params["s2_mag"]
+    s2_y = jnp.sin(params["s2_theta"]) * jnp.sin(params["s2_phi"]) * params["s2_mag"]
+    s2_z = jnp.cos(params["s2_theta"]) * params["s2_mag"]
+    
+    params["s2_x"] = s2_x
+    params["s2_y"] = s2_y
+    params["s2_z"] = s2_z
+    
+    return params
 
 # For overlapping signals
 def q1_to_eta1(params: dict) -> dict:

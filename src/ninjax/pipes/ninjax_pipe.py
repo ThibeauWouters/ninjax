@@ -3,6 +3,7 @@ import json
 import numpy as np
 from astropy.time import Time
 import inspect
+import time
 
 from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD
 from jimgw.jim import Jim
@@ -54,7 +55,9 @@ class NinjaxPipe(object):
         self.complete_prior = self.set_prior()
         self.naming = self.complete_prior.naming
         self.n_dim = len(self.naming)
-        self.complete_prior_bounds = self.set_prior_bounds()
+        # FIXME: this breaks for some priors
+        # self.complete_prior_bounds = self.set_prior_bounds(), but it is only used for now in the heterodyned likelihoods, so we can skip it
+        self.complete_prior_bounds = []
         logger.info("Finished prior setup")
         
         # Set the transforms
@@ -262,6 +265,7 @@ class NinjaxPipe(object):
             
             logger.info(f"Using the following kwargs for the GW likelihood: {self.gw_pipe.kwargs}")
             
+            init_heterodyned_start = time.time()
             likelihood = HeterodynedTransientLikelihoodFD(
                 self.gw_pipe.ifos,
                 prior=self.complete_prior,
@@ -275,6 +279,9 @@ class NinjaxPipe(object):
                 ref_params=ref_params,
                 **self.gw_pipe.kwargs
                 )
+            init_heterodyned_end = time.time()
+            
+            logger.info(f"Initialization of HeterodynedTransientLikelihoodFD took {init_heterodyned_end - init_heterodyned_start} seconds = {(init_heterodyned_end - init_heterodyned_start) / 60} minutes")
         
             print(likelihood.required_keys)
         
@@ -319,6 +326,7 @@ class NinjaxPipe(object):
             logger.info(f"Using the following kwargs for the GW likelihood: {self.gw_pipe.kwargs}")
             
             logger.info("Using GW TransientLikelihoodFD. Initializing likelihood")
+            init_heterodyned_start = time.time()
             likelihood = HeterodynedDoubleTransientLikelihoodFD(
                 self.gw_pipe.ifos,
                 prior=self.complete_prior,
@@ -333,6 +341,9 @@ class NinjaxPipe(object):
                 **self.gw_pipe.kwargs
                 )
             print(likelihood.required_keys)
+            init_heterodyned_end = time.time()
+            
+            logger.info(f"Initialization of HeterodynedTransientLikelihoodFD took around {int((init_heterodyned_end - init_heterodyned_start) / 60)} minutes")
         
         return likelihood
     
@@ -341,8 +352,8 @@ class NinjaxPipe(object):
         logger.info("Checking the setup between prior, transforms, and likelihood")
         sample = self.complete_prior.sample(jax.random.PRNGKey(self.seed), 3)
         logger.info(f"sample: {sample}")
-        sample_transformed = jax.vmap(self.likelihood.transform)(sample)
-        logger.info(f"sample_transformed: {sample_transformed}")
+        # sample_transformed = jax.vmap(self.likelihood.transform)(sample)
+        # logger.info(f"sample_transformed: {sample_transformed}")
         
         # TODO: what if we actually need to give data instead of nothing?
         log_prob = jax.vmap(self.likelihood.evaluate)(sample, {})

@@ -37,7 +37,10 @@ def body(pipe: NinjaxPipe):
     # Generate arguments for the local sampler
     mass_matrix = jnp.eye(pipe.n_dim)
     for idx, prior in enumerate(pipe.complete_prior.priors):
-        mass_matrix = mass_matrix.at[idx, idx].set(prior.xmax - prior.xmin) # fetch the prior range
+        if hasattr(prior, "xmin"):
+            mass_matrix = mass_matrix.at[idx, idx].set(prior.xmax - prior.xmin) # fetch the prior range
+        else:
+            mass_matrix = mass_matrix.at[idx, idx].set(1) # just some dummy value for now
     local_sampler_arg = {'step_size': mass_matrix * hyperparameters["eps_mass_matrix"]} # set the overall step size
     hyperparameters["local_sampler_arg"] = local_sampler_arg
     

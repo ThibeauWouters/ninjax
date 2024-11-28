@@ -6,7 +6,7 @@ from astropy.time import Time
 import jax 
 import jax.numpy as jnp
 
-from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD
+from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD, RippleIMRPhenomPv2
 from jimgw.single_event.detector import Detector, TriangularNetwork2G, H1, L1, V1, ET
 from jimgw.prior import Composite
 
@@ -16,7 +16,9 @@ from ninjax.pipes.pipe_utils import logger
 WAVEFORMS_DICT = {"TaylorF2": RippleTaylorF2, 
                   "IMRPhenomD_NRTidalv2": RippleIMRPhenomD_NRTidalv2,
                   "IMRPhenomD": RippleIMRPhenomD,
+                  "IMRPhenomPv2": RippleIMRPhenomPv2,
                   }
+
 SUPPORTED_WAVEFORMS = list(WAVEFORMS_DICT.keys())
 BNS_WAVEFORMS = ["IMRPhenomD_NRTidalv2", "TaylorF2"]
 
@@ -54,9 +56,13 @@ class GWPipe:
                 # TODO: should separate load existing injection from creating new one
                 self.gw_injection = self.set_gw_injection()
             self.dump_gw_injection()
+            # TODO: this is not recommended for the ET BNS 5 Hz runs! Put a flag here
+            # self.dump_gw_data()
         else:
             self.set_gw_data_from_npz()
             # self.set_detector_info() # needed? Duration, epoch, gmst,...
+            
+        
             
     @property
     def fmin(self):
@@ -216,6 +222,7 @@ class GWPipe:
             
             # Get duration based on Mc and fmin if not specified
             if config_duration is None:
+                # TODO: put a minimum of 4 seconds here in case of very short signals?
                 duration = utils.signal_duration(self.fmin, injection["M_c"])
                 duration = 2 ** np.ceil(np.log2(duration))
                 duration = float(duration)
@@ -240,6 +247,9 @@ class GWPipe:
             except Exception as e:
                 logger.error(f"Error in applying transforms: {e}")
                 # raise ValueError("Error in applying transforms")
+            
+            logger.info("After transforms, the injection parameters are:")
+            logger.info(injection)
             
             # Setup the timing setting for the injection
             self.epoch = self.duration - self.post_trigger_duration
@@ -498,8 +508,10 @@ class GWPipe:
     
     def dump_gw_data(self) -> None:
         # Dump the GW data
+        logger.info("Dumping the GW data to npz files:")
         for ifo in self.ifos:
             ifo_path = os.path.join(self.outdir, f"{ifo.name}.npz")
+            logger.info(f"    Dumping to {ifo_path}")
             np.savez(ifo_path, frequencies=ifo.frequencies, data=ifo.data, psd=ifo.psd)
 
     def set_waveform(self) -> Waveform:
