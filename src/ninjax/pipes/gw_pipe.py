@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 
 from jimgw.single_event.waveform import Waveform, RippleTaylorF2, RippleIMRPhenomD_NRTidalv2, RippleIMRPhenomD_NRTidalv2_no_taper, RippleIMRPhenomD, RippleIMRPhenomPv2
-from jimgw.single_event.detector import Detector, TriangularNetwork2G, H1, L1, V1, ET
+from jimgw.single_event.detector import Detector, TriangularNetwork2G, H1, L1, V1, ET, CE
 from jimgw.prior import Composite
 
 import ninjax.pipes.pipe_utils as utils
@@ -56,7 +56,7 @@ class GWPipe:
                 # TODO: should separate load existing injection from creating new one
                 self.gw_injection = self.set_gw_injection()
             self.dump_gw_injection()
-            # TODO: this is not recommended for the ET BNS 5 Hz runs! Put a flag here
+            # TODO: this is not recommended for the ET BNS 5 Hz runs! Put a flag here to know when to dump or not to dump
             # self.dump_gw_data()
         else:
             self.set_gw_data_from_npz()
@@ -125,12 +125,48 @@ class GWPipe:
         return self.config["psd_file_ET3"]
     
     @property
+    def psd_file_CE(self):
+        return self.config["psd_file_CE"]
+    
+    @property
+    def data_file_H1(self):
+        return self.config["data_file_H1"]
+    
+    @property
+    def data_file_L1(self):
+        return self.config["data_file_L1"]
+    
+    @property
+    def data_file_V1(self):
+        return self.config["data_file_V1"]
+    
+    @property
+    def data_file_ET1(self):
+        return self.config["data_file_ET1"]
+    
+    @property
+    def data_file_ET2(self):
+        return self.config["data_file_ET2"]
+    
+    @property
+    def data_file_ET3(self):
+        return self.config["data_file_ET3"]
+    
+    @property
     def relative_binning_binsize(self):
         return int(self.config["relative_binning_binsize"])
     
     @property
     def relative_binning_ref_params_equal_true_params(self):
         return eval(self.config["relative_binning_ref_params_equal_true_params"])
+    
+    @property
+    def relative_binning_ref_params(self):
+        return eval(self.config["relative_binning_ref_params"])
+    
+    @property
+    def config_duration(self):
+        return eval(self.config["duration"])
     
     @property
     def kwargs(self) -> dict:
@@ -145,7 +181,9 @@ class GWPipe:
                      "V1": self.psd_file_V1,
                      "ET1": self.psd_file_ET1,
                      "ET2": self.psd_file_ET2,
-                     "ET3": self.psd_file_ET3}
+                     "ET3": self.psd_file_ET3,
+                     "CE": self.psd_file_CE,
+                     }
         return psds_dict
     
     def set_eos_file(self) -> str:
@@ -198,7 +236,6 @@ class GWPipe:
         logger.info(f"Setting up GW injection . . . ")
         logger.info(f"The SNR thresholds are: {self.gw_SNR_threshold_low} - {self.gw_SNR_threshold_high}")
         pass_threshold = False
-        config_duration = eval(self.config["duration"])
         
         sample_key = jax.random.PRNGKey(self.seed)
         while not pass_threshold:
@@ -221,14 +258,14 @@ class GWPipe:
                 injection = utils.inject_lambdas_from_eos(injection, self.eos_file)
             
             # Get duration based on Mc and fmin if not specified
-            if config_duration is None:
+            if self.config_duration is None:
                 # TODO: put a minimum of 4 seconds here in case of very short signals?
                 duration = utils.signal_duration(self.fmin, injection["M_c"])
                 duration = 2 ** np.ceil(np.log2(duration))
                 duration = float(duration)
                 logger.info(f"Duration is not specified in the config. Computed chirp time: for fmin = {self.fmin} and M_c = {injection['M_c']} is {duration}")
             else:
-                duration = config_duration
+                duration = self.config_duration
                 logger.info(f"Duration is specified in the config: {duration}")
                 
             self.duration = duration
@@ -366,14 +403,14 @@ class GWPipe:
                 injection = utils.inject_lambdas_from_eos(injection, self.eos_file)
             
             # Get duration based on Mc and fmin if not specified
-            if config_duration is None:
+            if self.config_duration is None:
                 lower_M_c = min(injection["M_c_1"], injection["M_c_2"])
                 duration = utils.signal_duration(self.fmin, lower_M_c)
                 duration = 2 ** np.ceil(np.log2(duration))
                 duration = float(duration)
                 logger.info(f"Duration is not specified in the config. Computed chirp time: for fmin = {self.fmin} and M_c = {lower_M_c} is {duration}")
             else:
-                duration = config_duration
+                duration = self.config_duration
                 logger.info(f"Duration is specified in the config: {duration}")
                 
             self.duration = duration
@@ -502,9 +539,29 @@ class GWPipe:
             json.dump(self.gw_injection, f, indent=4, cls=utils.CustomJSONEncoder)
     
     def set_gw_data_from_npz(self):
-        # FIXME: this has to be added in the future
-        # Make sure the duration is set here as well
-        raise NotImplementedError
+        # TODO: Move this kind of functionality inside Jim where we then also check for consistency between the detectors
+        for ifo in self.ifos:
+            data_filename = eval(f"self.data_file_{ifo.name}")
+            datadump = np.load(data_filename)
+            
+            frequencies = jnp.array(datadump["frequencies"])
+            data = jnp.array(datadump["data"])
+            psd = jnp.array(datadump["psd"])
+            
+            # Set the duration as well # TODO: has to be checked
+            if self.config_duration is None or self.config_duration <= 0 or self.config_duration == "None":
+                df = frequencies[1] - frequencies[0]
+                self.duration = 1. / df
+                self.duration = 2 ** np.ceil(np.log2(self.duration))
+            else:
+                self.duration = self.config_duration
+            
+            assert jnp.shape(frequencies) == jnp.shape(data), "Frequencies and data do not have the same shape."
+            assert jnp.shape(frequencies) == jnp.shape(psd), "Frequencies and PSD do not have the same shape."
+            
+            ifo.frequencies = frequencies
+            ifo.data = data
+            ifo.psd = psd
     
     def dump_gw_data(self) -> None:
         # Dump the GW data
@@ -532,7 +589,7 @@ class GWPipe:
     
     def set_ifos(self) -> list[Detector]:
         # Go from string to list of ifos
-        supported_ifos = ["H1", "L1", "V1", "ET"]
+        supported_ifos = ["H1", "L1", "V1", "ET", "CE"]
         self.ifos_str: list[str] = self.config["ifos"].split(",")
         self.ifos_str = [x.strip() for x in self.ifos_str]
         

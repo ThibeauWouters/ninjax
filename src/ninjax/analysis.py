@@ -71,8 +71,13 @@ def body(pipe: NinjaxPipe):
     )
     
     # Fetch injected values for the plotting below
-    with open(os.path.join(pipe.outdir, "injection.json"), "r") as f:
-        injection = json.load(f)
+    if pipe.gw_pipe.is_gw_injection:
+        logger.info("Fetching the injected values for plotting")
+        with open(os.path.join(pipe.outdir, "injection.json"), "r") as f:
+            injection = json.load(f)
+        truths = np.array([injection[key] for key in pipe.keys_to_plot])
+    else:
+        truths = None
     
     ### Finally, do the sampling
     jim.sample(jax.random.PRNGKey(pipe.sampling_seed))
@@ -137,7 +142,6 @@ def body(pipe: NinjaxPipe):
         
         chains = np.array([chains[key].flatten() for key in pipe.keys_to_plot])
         logger.info(f"Chains shape is: {chains.shape}")
-        truths = np.array([injection[key] for key in pipe.keys_to_plot])
         
         utils.plot_chains(chains.T, "corner", outdir, labels = pipe.labels_to_plot, truths = truths)
     except Exception as e:

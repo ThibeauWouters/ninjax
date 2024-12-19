@@ -18,7 +18,10 @@ from ninjax.pipes.pipe_utils import logger
 from ninjax.pipes.gw_pipe import GWPipe
 from ninjax.parser import ConfigParser
 from ninjax.likelihood import LikelihoodWithTransforms
+from ninjax.prior import *
 from ninjax import transforms
+
+import optax
 
 # TODO: can we make this more automated?
 LIKELIHOODS_DICT = {"TransientLikelihoodFD": TransientLikelihoodFD, 
@@ -71,7 +74,16 @@ class NinjaxPipe(object):
         self.check_valid_likelihood(likelihood_str)
         self.original_likelihood = self.set_original_likelihood(likelihood_str)
         
-        self.likelihood = LikelihoodWithTransforms(self.original_likelihood, self.transforms)
+        # TODO: make this somehow an argument to be passed?
+        
+        init_value = 10_000
+        end_value = 1
+        transition_steps = int(self.config["n_loop_training"])
+        decay_rate = 0.99
+        transition_begin = 5
+        temperature_schedule = optax.schedules.exponential_decay(init_value, transition_steps, decay_rate, transition_begin, end_value = end_value)
+        
+        self.likelihood = LikelihoodWithTransforms(self.original_likelihood, self.transforms, temperature_schedule=temperature_schedule)
         
         # TODO: check if the setup prior -> transform -> likelihood is OK
         logger.info(f"Required keys for the likelihood: {self.likelihood.required_keys}")
@@ -205,6 +217,7 @@ class NinjaxPipe(object):
             "eps_mass_matrix": float(self.config["eps_mass_matrix"]),
             "use_scheduler": eval(self.config["use_scheduler"]),
             "stopping_criterion_global_acc": float(self.config["stopping_criterion_global_acc"]),
+            "stopping_criterion_loss": float(self.config["stopping_criterion_loss"]),
             "nf_model_kwargs": self.nf_model_kwargs,
         }
         return hyperparameters
@@ -256,12 +269,24 @@ class NinjaxPipe(object):
         # Create the likelihood
         if likelihood_str == "HeterodynedTransientLikelihoodFD":
             logger.info("Using GW HeterodynedTransientLikelihoodFD. Initializing likelihood")
-            if self.gw_pipe.relative_binning_ref_params_equal_true_params:
-                ref_params = self.gw_pipe.gw_injection
-                logger.info("Using the true parameters as reference parameters for the relative binning")
+            
+            # Check what to do in case of an injection
+            if self.gw_pipe.is_gw_injection:
+                if self.gw_pipe.relative_binning_ref_params_equal_true_params:
+                    ref_params = self.gw_pipe.gw_injection
+                    logger.info("Using the injection parameters as reference parameters for the relative binning")
+                else:
+                    ref_params = None
+                    logger.info("Will search for reference waveform for relative binning")
+                    
+            # Check what to do in case of analyzing real data
             else:
-                ref_params = None
-                logger.info("Will search for reference waveform for relative binning")
+                if self.gw_pipe.relative_binning_ref_params is not None or self.gw_pipe.relative_binning_ref_params != "None":
+                    ref_params = self.gw_pipe.relative_binning_ref_params
+                    logger.info("Using provided reference parameters for relative binning")
+                else:
+                    ref_params = None
+                    logger.info("Will search for reference waveform for relative binning")
             
             logger.info(f"Using the following kwargs for the GW likelihood: {self.gw_pipe.kwargs}")
             
